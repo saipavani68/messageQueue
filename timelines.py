@@ -4,6 +4,7 @@ from datetime import datetime
 from redis import Redis
 from rq import Queue
 import sqlite3
+import logging
 
 app=Flask('timelines')
 app.config.from_envvar('APP_CONFIG')
@@ -41,8 +42,6 @@ def get_db():
 def getUserTimeline():
     query_parameters=request.args
     username=query_parameters.get('username')
-
-    db=get_db()
     
     #Returns 400 error when username is not provided.
     if username == '' or username == None:
@@ -56,7 +55,7 @@ def getUserTimeline():
  
 @app.route('/getPublicTimeline',methods=['GET'])
 def getPublicTimeline():
-    db=get_db()
+    
     getPublicTimeline=query_db('SELECT * FROM Tweets ORDER BY timestamp DESC LIMIT 25')
 
     return jsonify(getPublicTimeline)
