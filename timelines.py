@@ -1,5 +1,6 @@
 import flask
 from flask import Flask,url_for,jsonify,g,request
+from flask_json_multidict import get_json_multidict
 from datetime import datetime
 from redis import Redis
 from rq import Queue
@@ -60,6 +61,7 @@ def getPublicTimeline():
 
     return jsonify(getPublicTimeline)
 
+
 #Returns recent(limited to 25) tweets from all users that this user follows.
 
 @app.route('/getHomeTimeline',methods=['GET'])
@@ -74,37 +76,49 @@ def getHomeTimeline():
     else:
         getHomeTimeline=query_db('SELECT * from Tweets WHERE username IN (SELECT usernameToFollow FROM user_following WHERE username=?) ORDER BY timestamp DESC LIMIT 25',[username])
         return jsonify(getHomeTimeline)
-
-def postTweet(params):
-    query_parameters=params
-    username = query_parameters.get('username')
-    text = query_parameters.get('text')
-    timestamp = datetime.utcnow()
-
-    db= get_db()
-    result = query_db('SELECT COUNT(*) as count FROM users WHERE username = ?', [username])
-    
-    #Returns 400 error when username or text is not provided.
-    if username == '' or username == None or text == '' or text== None:
-        return jsonify({"statusCode": 400, "error": "Bad Request", "message": "Invalid parameter" })
-    
-    #Only an existing user can post a tweet
-    elif result[0].get('count') > 0:
-        db.execute('INSERT INTO Tweets (username, text, timestamp) VALUES(?,?, ?)',(username, text, timestamp))
-        db.commit()
-        return jsonify({"statusCode": 200})
-    else:
-        return jsonify({"message": "Username doesn't exist. If you are a new user please register, or if you are an existing user please sign in."})
-
+  
+@app.route('/trending',methods=['GET'])
 def hashtagAnalysis():
-   getTweets = query_db('SELECT * FROM Tweets')
-   app.logger.info(getTweets())
+    with app.app_context():
+        hashtag_list = []
+        tweets= query_db('SELECT * FROM Tweets ORDER BY timestamp DESC')
+        for tweet in tweets:
+            for tweet in tweet["text"].split():
+                if tweet[0] == '#':
+                    hashtag_list.append(tweet)
+        
+        return jsonify(hashtag_list)
+
+@app.route('/status/<job_id>')
+def postTweet(username, text):
+    with app.app_context():
+        timestamp = datetime.utcnow()
+        db= get_db()
+        result = query_db('SELECT COUNT(*) as count FROM users WHERE username = ?', [username])
+        
+        #Returns 400 error when username or text is not provided.
+        if username == '' or username == None or text == '' or text== None:
+            return jsonify({"statusCode": 400, "error": "Bad Request", "message": "Invalid parameter" })
+        
+        #Only an existing user can post a tweet
+        elif result[0].get('count') > 0:
+            db.execute('INSERT INTO Tweets (username, text, timestamp) VALUES(?,?, ?)',(username, text, timestamp))
+            db.commit()
+            return jsonify({"statusCode": 200})
+        else:
+            return jsonify({"message": "Username doesn't exist. If you are a new user please register, or if you are an existing user please sign in."})
     
 @app.route('/postTweet', methods=['POST'])
 def callPostTweet():
     redis_conn = Redis()
     q = Queue(connection=redis_conn)
-    q.enqueue(postTweet, request.form)
+    request.body = request.form
+    if request.headers['content-type'] == 'application/json':
+        request.body = get_json_multidict(request)
+    username =  request.body.get('username')
+    text = request.body.get('text')
+    postTweets_job = q.enqueue(postTweet, args=(username, text,))
     q_hashtags = Queue('hashtags', connection=redis_conn)
     q_hashtags.enqueue(hashtagAnalysis)
-    return jsonify({"statusCode": 202})
+    return jsonify({}), 202, {'Location': url_for('postTweet', job_id=postTweets_job.get_id())}
+
